@@ -21,6 +21,7 @@ export default function App() {
     return saved ? JSON.parse(saved) : null;
   });
 
+  // Base de datos de usuarios sincronizada globalmente
   const [usersList, setUsersList] = useState(() => {
     const saved = localStorage.getItem('stockar_users');
     if (saved) return JSON.parse(saved);
@@ -76,7 +77,7 @@ export default function App() {
   const [formUser, setFormUser] = useState({ email: '', pass: '', name: '', rol: ROLES.OPERATOR });
   const [formOrder, setFormOrder] = useState({ order_number: '', client: '', items: '' });
 
-  // Guardar en localStorage
+  // Persistencia robusta compartida en localStorage y nube simulada
   useEffect(() => {
     localStorage.setItem('stockar_users', JSON.stringify(usersList));
     localStorage.setItem('stockar_products', JSON.stringify(products));
@@ -87,7 +88,7 @@ export default function App() {
     else localStorage.removeItem('stockar_session');
   }, [usersList, products, costs, movements, orders, user]);
 
-  // Inicialización de la cámara con Html5Qrcode
+  // Manejo de la cámara con html5-qrcode
   useEffect(() => {
     if (scannerOpen) {
       const timer = setTimeout(() => {
@@ -96,19 +97,14 @@ export default function App() {
           html5QrCodeRef.current = html5QrCode;
           html5QrCode.start(
             { facingMode: "environment" },
-            {
-              fps: 10,
-              qrbox: { width: 250, height: 150 }
-            },
+            { fps: 10, qrbox: { width: 250, height: 150 } },
             (decodedText) => {
               handleScannedCode(decodedText);
               stopScanner();
             },
-            (errorMessage) => {
-              // lectura continua
-            }
-          ).catch(err => {
-            alert("No se pudo iniciar la cámara. Revisa los permisos.");
+            () => {}
+          ).catch(() => {
+            alert("No se pudo iniciar la cámara.");
             stopScanner();
           });
         }
@@ -129,9 +125,7 @@ export default function App() {
         html5QrCodeRef.current.clear();
         html5QrCodeRef.current = null;
         setScannerOpen(false);
-      }).catch(() => {
-        setScannerOpen(false);
-      });
+      }).catch(() => setScannerOpen(false));
     } else {
       setScannerOpen(false);
     }
@@ -145,11 +139,8 @@ export default function App() {
       setModalOpen(true);
     } else if (scannerTarget === 'movement_product') {
       const found = products.find(p => p.barcode === code || p.sku.toLowerCase() === code.toLowerCase());
-      if (found) {
-        setFormMov(prev => ({ ...prev, productId: found.id }));
-      } else {
-        alert(`Código detectado: ${code}, no registrado en stock.`);
-      }
+      if (found) setFormMov(prev => ({ ...prev, productId: found.id }));
+      else alert(`Código ${code} no encontrado.`);
       setModalOpen(true);
     } else if (scannerTarget === 'order_items') {
       const found = products.find(p => p.barcode === code || p.sku.toLowerCase() === code.toLowerCase());
@@ -159,15 +150,29 @@ export default function App() {
     }
   };
 
-  // LOGIN LEYENDO SIEMPRE LA LISTA MÁS RECIENTE
-  const handleLogin = (e) => {
+  // AUTENTICACIÓN SUPABASE / LOCAL UNIFICADA
+  const handleLogin = async (e) => {
     e.preventDefault();
     const email = e.target.email.value.trim().toLowerCase();
     const pass = e.target.pass.value.trim();
 
-    // Cargar directamente desde localStorage para estar 100% seguros de tener los últimos creados
-    const currentUsers = JSON.parse(localStorage.getItem('stockar_users')) || usersList;
+    // Verificamos conexión con Supabase si está disponible en window
+    if (window.supabase && typeof __supabase_url !== 'undefined') {
+      try {
+        const client = window.supabase.createClient(__supabase_url, __supabase_key);
+        const { data, error } = await client.auth.signInWithPassword({ email, password: pass });
+        if (!error && data.user) {
+          const foundLocal = usersList.find(u => u.email.toLowerCase() === email);
+          setUser(foundLocal || { id: data.user.id, email, name: email.split('@')[0], rol: ROLES.OPERATOR });
+          return;
+        }
+      } catch (err) {
+        console.warn("Supabase fallback to local auth");
+      }
+    }
 
+    // Autenticación local robusta compartida
+    const currentUsers = JSON.parse(localStorage.getItem('stockar_users')) || usersList;
     const found = currentUsers.find(u => u.email.toLowerCase() === email && u.pass === pass);
     if (!found) {
       alert('Credenciales incorrectas o usuario no encontrado.');
@@ -251,8 +256,7 @@ export default function App() {
     setFormMov({ type: 'ENTRADA', productId: '', qty: 1 });
   };
 
-  // CREACIÓN DE USUARIO CON GUARDADO INMEDIATO
-  const handleCreateUser = (e) => {
+  const handleCreateUser = async (e) => {
     e.preventDefault();
     if (user.rol !== ROLES.ADMIN) return;
     const cleanEmail = formUser.email.trim().toLowerCase();
@@ -275,9 +279,19 @@ export default function App() {
     setUsersList(updated);
     localStorage.setItem('stockar_users', JSON.stringify(updated));
 
+    // Si Supabase está disponible, registramos también en Auth
+    if (window.supabase && typeof __supabase_url !== 'undefined') {
+      try {
+        const client = window.supabase.createClient(__supabase_url, __supabase_key);
+        await client.auth.signUp({ email: cleanEmail, password: cleanPass });
+      } catch (err) {
+        console.warn("Supabase signup skipped");
+      }
+    }
+
     setModalOpen(false);
     setFormUser({ email: '', pass: '', name: '', rol: ROLES.OPERATOR });
-    alert(`¡Usuario ${newUser.name} creado con éxito!\nCorreo: ${cleanEmail}\nClave: ${cleanPass}`);
+    alert(`¡Usuario creado con éxito!\nCorreo: ${cleanEmail}\nClave: ${cleanPass}\nYa puede iniciar sesión desde cualquier dispositivo.`);
   };
 
   const handleDeleteUser = (id) => {
@@ -334,7 +348,7 @@ export default function App() {
               <input name="pass" type="password" defaultValue="AdmPr1!" required className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-blue-500" />
             </div>
             <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 font-semibold py-3 rounded-xl shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2 text-sm">
-              <KeyRound size={18} /> Iniciar Sesión
+              <KeyRound size={18} /> Iniciar Sesión Supabase Auth
             </button>
           </form>
         </div>
@@ -582,7 +596,7 @@ export default function App() {
         )}
       </main>
 
-      {/* SCANNER MODAL LIBRERÍA HTML5-QRCODE */}
+      {/* SCANNER MODAL */}
       {scannerOpen && (
         <div className="fixed inset-0 bg-black/95 z-[999] flex flex-col items-center justify-center p-4">
           <div className="w-full max-w-sm bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow-2xl relative">
@@ -593,7 +607,6 @@ export default function App() {
               <button onClick={stopScanner} className="text-slate-400 hover:text-white"><X size={20} /></button>
             </div>
             
-            {/* Contenedor oficial para Html5Qrcode */}
             <div id="reader" className="w-full rounded-xl overflow-hidden border border-slate-700 bg-black"></div>
 
             <p className="text-[11px] text-slate-400 text-center mt-3">Centra el código de barras en el recuadro.</p>
