@@ -65,11 +65,10 @@ export default function App() {
   const [modalType, setModalType] = useState(''); 
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Scanner states
+  // Scanner States
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scannerTarget, setScannerTarget] = useState(null); 
-  const videoRef = useRef(null);
-  const scannerStreamRef = useRef(null);
+  const html5QrCodeRef = useRef(null);
 
   // Form states
   const [formProd, setFormProd] = useState({ id: '', sku: '', barcode: '', name: '', description: '', stock: 0, unit_cost: 0 });
@@ -77,6 +76,7 @@ export default function App() {
   const [formUser, setFormUser] = useState({ email: '', pass: '', name: '', rol: ROLES.OPERATOR });
   const [formOrder, setFormOrder] = useState({ order_number: '', client: '', items: '' });
 
+  // Guardar en localStorage
   useEffect(() => {
     localStorage.setItem('stockar_users', JSON.stringify(usersList));
     localStorage.setItem('stockar_products', JSON.stringify(products));
@@ -87,56 +87,53 @@ export default function App() {
     else localStorage.removeItem('stockar_session');
   }, [usersList, products, costs, movements, orders, user]);
 
-  // Cámara / Escáner con prioridad superior de capa (z-index 100)
-  const startScanner = async (target) => {
-    // Si hay un modal abierto, lo cerramos momentáneamente para que la cámara tome toda la pantalla limpia
+  // Inicialización de la cámara con Html5Qrcode
+  useEffect(() => {
+    if (scannerOpen) {
+      const timer = setTimeout(() => {
+        if (window.Html5Qrcode) {
+          const html5QrCode = new window.Html5Qrcode("reader");
+          html5QrCodeRef.current = html5QrCode;
+          html5QrCode.start(
+            { facingMode: "environment" },
+            {
+              fps: 10,
+              qrbox: { width: 250, height: 150 }
+            },
+            (decodedText) => {
+              handleScannedCode(decodedText);
+              stopScanner();
+            },
+            (errorMessage) => {
+              // lectura continua
+            }
+          ).catch(err => {
+            alert("No se pudo iniciar la cámara. Revisa los permisos.");
+            stopScanner();
+          });
+        }
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [scannerOpen]);
+
+  const startScanner = (target) => {
     setModalOpen(false);
     setScannerTarget(target);
     setScannerOpen(true);
-    
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      scannerStreamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-        scanFrame();
-      }
-    } catch (err) {
-      alert('No se pudo acceder a la cámara. Verifica los permisos.');
-      setScannerOpen(false);
-    }
   };
 
   const stopScanner = () => {
-    if (scannerStreamRef.current) {
-      scannerStreamRef.current.getTracks().forEach(track => track.stop());
-      scannerStreamRef.current = null;
-    }
-    setScannerOpen(false);
-  };
-
-  const scanFrame = async () => {
-    if (!videoRef.current || videoRef.current.readyState !== videoRef.current.HAVE_ENOUGH_DATA) {
-      if (scannerOpen) requestAnimationFrame(scanFrame);
-      return;
-    }
-
-    if ('BarcodeDetector' in window) {
-      try {
-        const barcodeDetector = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'code_128', 'upc_a', 'qr_code'] });
-        const barcodes = await barcodeDetector.detect(videoRef.current);
-        if (barcodes.length > 0) {
-          handleScannedCode(barcodes[0].rawValue);
-          stopScanner();
-          return;
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    if (scannerOpen) {
-      requestAnimationFrame(scanFrame);
+    if (html5QrCodeRef.current) {
+      html5QrCodeRef.current.stop().then(() => {
+        html5QrCodeRef.current.clear();
+        html5QrCodeRef.current = null;
+        setScannerOpen(false);
+      }).catch(() => {
+        setScannerOpen(false);
+      });
+    } else {
+      setScannerOpen(false);
     }
   };
 
@@ -145,7 +142,7 @@ export default function App() {
       setSearchTerm(code);
     } else if (scannerTarget === 'new_product' || scannerTarget === 'edit_product') {
       setFormProd(prev => ({ ...prev, barcode: code }));
-      setModalOpen(true); // Reabrimos el modal anterior
+      setModalOpen(true);
     } else if (scannerTarget === 'movement_product') {
       const found = products.find(p => p.barcode === code || p.sku.toLowerCase() === code.toLowerCase());
       if (found) {
@@ -162,13 +159,18 @@ export default function App() {
     }
   };
 
+  // LOGIN LEYENDO SIEMPRE LA LISTA MÁS RECIENTE
   const handleLogin = (e) => {
     e.preventDefault();
     const email = e.target.email.value.trim().toLowerCase();
     const pass = e.target.pass.value.trim();
-    const found = usersList.find(u => u.email.toLowerCase() === email && u.pass === pass);
+
+    // Cargar directamente desde localStorage para estar 100% seguros de tener los últimos creados
+    const currentUsers = JSON.parse(localStorage.getItem('stockar_users')) || usersList;
+
+    const found = currentUsers.find(u => u.email.toLowerCase() === email && u.pass === pass);
     if (!found) {
-      alert('Credenciales incorrectas.');
+      alert('Credenciales incorrectas o usuario no encontrado.');
       return;
     }
     setUser(found);
@@ -249,21 +251,33 @@ export default function App() {
     setFormMov({ type: 'ENTRADA', productId: '', qty: 1 });
   };
 
-  // Creación de usuario y autologin inmediato opcional o aviso claro
+  // CREACIÓN DE USUARIO CON GUARDADO INMEDIATO
   const handleCreateUser = (e) => {
     e.preventDefault();
     if (user.rol !== ROLES.ADMIN) return;
     const cleanEmail = formUser.email.trim().toLowerCase();
+    const cleanPass = formUser.pass.trim();
+
     if (usersList.some(u => u.email.toLowerCase() === cleanEmail)) {
       alert('El correo ya está registrado.');
       return;
     }
-    const newUser = { id: 'u_' + Date.now(), ...formUser, email: cleanEmail };
-    const updatedUsers = [...usersList, newUser];
-    setUsersList(updatedUsers);
+
+    const newUser = { 
+      id: 'u_' + Date.now(), 
+      name: formUser.name.trim(), 
+      email: cleanEmail, 
+      pass: cleanPass, 
+      rol: formUser.rol 
+    };
+
+    const updated = [...usersList, newUser];
+    setUsersList(updated);
+    localStorage.setItem('stockar_users', JSON.stringify(updated));
+
     setModalOpen(false);
     setFormUser({ email: '', pass: '', name: '', rol: ROLES.OPERATOR });
-    alert('¡Usuario creado con éxito! Ya puede iniciar sesión con sus credenciales.');
+    alert(`¡Usuario ${newUser.name} creado con éxito!\nCorreo: ${cleanEmail}\nClave: ${cleanPass}`);
   };
 
   const handleDeleteUser = (id) => {
@@ -273,7 +287,9 @@ export default function App() {
       return;
     }
     if (confirm('¿Eliminar usuario?')) {
-      setUsersList(usersList.filter(u => u.id !== id));
+      const updated = usersList.filter(u => u.id !== id);
+      setUsersList(updated);
+      localStorage.setItem('stockar_users', JSON.stringify(updated));
     }
   };
 
@@ -566,7 +582,7 @@ export default function App() {
         )}
       </main>
 
-      {/* SCANNER MODAL CON Z-INDEX MÁXIMO PARA QUE NUNCA QUEDE ATRÁS */}
+      {/* SCANNER MODAL LIBRERÍA HTML5-QRCODE */}
       {scannerOpen && (
         <div className="fixed inset-0 bg-black/95 z-[999] flex flex-col items-center justify-center p-4">
           <div className="w-full max-w-sm bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow-2xl relative">
@@ -574,23 +590,21 @@ export default function App() {
               <h3 className="font-bold text-sm text-white flex items-center gap-2">
                 <Camera size={18} className="text-blue-400" /> Escáner de Código
               </h3>
-              <button onClick={() => { stopScanner(); if(modalType) setModalOpen(true); }} className="text-slate-400 hover:text-white"><X size={20} /></button>
+              <button onClick={stopScanner} className="text-slate-400 hover:text-white"><X size={20} /></button>
             </div>
-            <div className="relative aspect-video bg-black rounded-xl overflow-hidden border border-slate-700">
-              <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
-              <div className="absolute inset-0 border-2 border-blue-500/50 m-8 rounded-lg pointer-events-none flex items-center justify-center">
-                <div className="w-full h-0.5 bg-rose-500/80 animate-pulse"></div>
-              </div>
-            </div>
-            <p className="text-[11px] text-slate-400 text-center mt-3">Apunta con la cámara al código de barras.</p>
-            <button onClick={() => { stopScanner(); if(modalType) setModalOpen(true); }} className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-2.5 rounded-xl mt-3 text-xs transition">
-              Cancelar / Volver
+            
+            {/* Contenedor oficial para Html5Qrcode */}
+            <div id="reader" className="w-full rounded-xl overflow-hidden border border-slate-700 bg-black"></div>
+
+            <p className="text-[11px] text-slate-400 text-center mt-3">Centra el código de barras en el recuadro.</p>
+            <button onClick={stopScanner} className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-2.5 rounded-xl mt-3 text-xs transition">
+              Cancelar
             </button>
           </div>
         </div>
       )}
 
-      {/* MODAL GLOBAL CON Z-INDEX CORRECTO (Z-50) */}
+      {/* MODAL GLOBAL */}
       {modalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-800 border border-slate-700 w-full max-w-md rounded-2xl p-6 shadow-2xl">
