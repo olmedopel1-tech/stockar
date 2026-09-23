@@ -62,7 +62,7 @@ export default function App() {
   const [currentTab, setCurrentTab] = useState('dashboard');
   const [isOnline, setIsOnline] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
-  const [modalType, setModalType] = useState(''); // 'product', 'movement', 'user', 'order', 'edit_product'
+  const [modalType, setModalType] = useState(''); 
   const [searchTerm, setSearchTerm] = useState('');
 
   // Scanner states
@@ -87,10 +87,13 @@ export default function App() {
     else localStorage.removeItem('stockar_session');
   }, [usersList, products, costs, movements, orders, user]);
 
-  // Cámara / Escáner
+  // Cámara / Escáner con prioridad superior de capa (z-index 100)
   const startScanner = async (target) => {
+    // Si hay un modal abierto, lo cerramos momentáneamente para que la cámara tome toda la pantalla limpia
+    setModalOpen(false);
     setScannerTarget(target);
     setScannerOpen(true);
+    
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
       scannerStreamRef.current = stream;
@@ -132,7 +135,9 @@ export default function App() {
         console.error(e);
       }
     }
-    if (scannerOpen) requestAnimationFrame(scanFrame);
+    if (scannerOpen) {
+      requestAnimationFrame(scanFrame);
+    }
   };
 
   const handleScannedCode = (code) => {
@@ -140,6 +145,7 @@ export default function App() {
       setSearchTerm(code);
     } else if (scannerTarget === 'new_product' || scannerTarget === 'edit_product') {
       setFormProd(prev => ({ ...prev, barcode: code }));
+      setModalOpen(true); // Reabrimos el modal anterior
     } else if (scannerTarget === 'movement_product') {
       const found = products.find(p => p.barcode === code || p.sku.toLowerCase() === code.toLowerCase());
       if (found) {
@@ -147,10 +153,12 @@ export default function App() {
       } else {
         alert(`Código detectado: ${code}, no registrado en stock.`);
       }
+      setModalOpen(true);
     } else if (scannerTarget === 'order_items') {
       const found = products.find(p => p.barcode === code || p.sku.toLowerCase() === code.toLowerCase());
       const itemName = found ? found.name : code;
       setFormOrder(prev => ({ ...prev, items: prev.items ? `${prev.items}, 1x ${itemName}` : `1x ${itemName}` }));
+      setModalOpen(true);
     }
   };
 
@@ -168,19 +176,16 @@ export default function App() {
 
   const handleLogout = () => setUser(null);
 
-  // Guardar / Editar Producto (Solo Admin)
   const handleSaveProduct = (e) => {
     e.preventDefault();
     if (user.rol !== ROLES.ADMIN) return;
 
     if (formProd.id) {
-      // Edición
       setProducts(products.map(p => p.id === formProd.id ? { ...p, sku: formProd.sku, barcode: formProd.barcode, name: formProd.name, description: formProd.description, stock: Number(formProd.stock) } : p));
       if (formProd.unit_cost > 0) {
         setCosts({ ...costs, [formProd.id]: { unit_cost: Number(formProd.unit_cost), currency: 'ARS' } });
       }
     } else {
-      // Creación
       const newId = 'p_' + Date.now();
       const newProd = {
         id: newId,
@@ -214,7 +219,6 @@ export default function App() {
     setModalOpen(true);
   };
 
-  // Movimientos Stock (Solo Admin ingresos, salidas generales operativas)
   const handleCreateMovement = (e) => {
     e.preventDefault();
     const prod = products.find(p => p.id === formMov.productId);
@@ -245,18 +249,21 @@ export default function App() {
     setFormMov({ type: 'ENTRADA', productId: '', qty: 1 });
   };
 
-  // Gestión de Usuarios (Solo Admin)
+  // Creación de usuario y autologin inmediato opcional o aviso claro
   const handleCreateUser = (e) => {
     e.preventDefault();
     if (user.rol !== ROLES.ADMIN) return;
-    if (usersList.some(u => u.email.toLowerCase() === formUser.email.toLowerCase())) {
+    const cleanEmail = formUser.email.trim().toLowerCase();
+    if (usersList.some(u => u.email.toLowerCase() === cleanEmail)) {
       alert('El correo ya está registrado.');
       return;
     }
-    setUsersList([...usersList, { id: 'u_' + Date.now(), ...formUser }]);
+    const newUser = { id: 'u_' + Date.now(), ...formUser, email: cleanEmail };
+    const updatedUsers = [...usersList, newUser];
+    setUsersList(updatedUsers);
     setModalOpen(false);
     setFormUser({ email: '', pass: '', name: '', rol: ROLES.OPERATOR });
-    alert('Usuario creado con éxito.');
+    alert('¡Usuario creado con éxito! Ya puede iniciar sesión con sus credenciales.');
   };
 
   const handleDeleteUser = (id) => {
@@ -270,7 +277,6 @@ export default function App() {
     }
   };
 
-  // Pedidos (Admin, Operador, Armador)
   const handleCreateOrder = (e) => {
     e.preventDefault();
     const newOrder = {
@@ -449,7 +455,7 @@ export default function App() {
           </div>
         )}
 
-        {/* ORDERS TAB (Cualquier rol autorizado puede agregar ítems escaneando con la cámara) */}
+        {/* ORDERS TAB */}
         {currentTab === 'orders' && (
           <div className="space-y-4">
             <div className="flex justify-between items-center">
@@ -528,7 +534,7 @@ export default function App() {
           </div>
         )}
 
-        {/* USERS TAB (Solo Admin) */}
+        {/* USERS TAB */}
         {currentTab === 'users' && isAdmin && (
           <div className="space-y-4">
             <div className="flex justify-between items-center">
@@ -544,7 +550,7 @@ export default function App() {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs bg-blue-500/20 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded font-bold">{u.rol}</span>
-                      <span className="text-xs text-slate-400 font-mono">{u.email}</span>
+                      <span className="text-xs text-slate-400 font-mono">{u.email} (Pass: {u.pass})</span>
                     </div>
                     <h3 className="font-bold text-sm text-white mt-1">{u.name}</h3>
                   </div>
@@ -560,15 +566,15 @@ export default function App() {
         )}
       </main>
 
-      {/* SCANNER MODAL */}
+      {/* SCANNER MODAL CON Z-INDEX MÁXIMO PARA QUE NUNCA QUEDE ATRÁS */}
       {scannerOpen && (
-        <div className="fixed inset-0 bg-black/90 z-50 flex flex-col items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/95 z-[999] flex flex-col items-center justify-center p-4">
           <div className="w-full max-w-sm bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow-2xl relative">
             <div className="flex justify-between items-center mb-3">
               <h3 className="font-bold text-sm text-white flex items-center gap-2">
                 <Camera size={18} className="text-blue-400" /> Escáner de Código
               </h3>
-              <button onClick={stopScanner} className="text-slate-400 hover:text-white"><X size={20} /></button>
+              <button onClick={() => { stopScanner(); if(modalType) setModalOpen(true); }} className="text-slate-400 hover:text-white"><X size={20} /></button>
             </div>
             <div className="relative aspect-video bg-black rounded-xl overflow-hidden border border-slate-700">
               <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
@@ -577,14 +583,14 @@ export default function App() {
               </div>
             </div>
             <p className="text-[11px] text-slate-400 text-center mt-3">Apunta con la cámara al código de barras.</p>
-            <button onClick={stopScanner} className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-2.5 rounded-xl mt-3 text-xs transition">
-              Cancelar
+            <button onClick={() => { stopScanner(); if(modalType) setModalOpen(true); }} className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-2.5 rounded-xl mt-3 text-xs transition">
+              Cancelar / Volver
             </button>
           </div>
         </div>
       )}
 
-      {/* MODAL GLOBAL */}
+      {/* MODAL GLOBAL CON Z-INDEX CORRECTO (Z-50) */}
       {modalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-800 border border-slate-700 w-full max-w-md rounded-2xl p-6 shadow-2xl">
@@ -599,7 +605,7 @@ export default function App() {
               <button onClick={() => setModalOpen(false)} className="text-slate-400 hover:text-white"><X size={20} /></button>
             </div>
 
-            {/* FORMULARIO PRODUCTO (CREAR / EDITAR - SOLO ADMIN) */}
+            {/* FORMULARIO PRODUCTO */}
             {(modalType === 'product' || modalType === 'edit_product') && (
               <form onSubmit={handleSaveProduct} className="space-y-3">
                 <div>
@@ -637,7 +643,7 @@ export default function App() {
               </form>
             )}
 
-            {/* FORMULARIO INGRESO STOCK (SOLO ADMIN) */}
+            {/* FORMULARIO INGRESO STOCK */}
             {modalType === 'movement' && (
               <form onSubmit={handleCreateMovement} className="space-y-3">
                 <div>
@@ -664,7 +670,7 @@ export default function App() {
               </form>
             )}
 
-            {/* FORMULARIO USUARIO (SOLO ADMIN) */}
+            {/* FORMULARIO USUARIO */}
             {modalType === 'user' && (
               <form onSubmit={handleCreateUser} className="space-y-3">
                 <div>
@@ -692,7 +698,7 @@ export default function App() {
               </form>
             )}
 
-            {/* FORMULARIO PEDIDO (CUALQUIER ROL AUTORIZADO PUEDE ESCANEAR ÍTEMS) */}
+            {/* FORMULARIO PEDIDO */}
             {modalType === 'order' && (
               <form onSubmit={handleCreateOrder} className="space-y-3">
                 <div>
@@ -707,7 +713,7 @@ export default function App() {
                   <div className="flex justify-between items-center mb-1">
                     <label className="text-xs font-semibold text-slate-400">Detalle de Ítems (Escanea con cámara)</label>
                     <button type="button" onClick={() => startScanner('order_items')} className="text-[11px] text-amber-400 hover:underline flex items-center gap-1 font-bold">
-                      <Camera size={14} /> Esccanear Producto
+                      <Camera size={14} /> Escanear Producto
                     </button>
                   </div>
                   <textarea placeholder="Ítems del pedido..." required value={formOrder.items} onChange={e => setFormOrder({...formOrder, items: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 h-20 resize-none font-mono" />
