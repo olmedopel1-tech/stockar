@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Package, LayoutDashboard, ArrowRightLeft, ClipboardList, 
   Settings, LogOut, Menu, X, ShieldAlert, CheckCircle2, 
@@ -16,7 +16,6 @@ const ROLES = {
 };
 
 export default function App() {
-  // Estado de sesión y datos base cargados desde localStorage o defaults iniciales
   const [user, setUser] = useState(() => {
     const saved = localStorage.getItem('stockar_session');
     return saved ? JSON.parse(saved) : null;
@@ -25,7 +24,6 @@ export default function App() {
   const [usersList, setUsersList] = useState(() => {
     const saved = localStorage.getItem('stockar_users');
     if (saved) return JSON.parse(saved);
-    // Único usuario por defecto inicial para poder arrancar
     return [
       { id: 'u-master', email: 'olmedopel1@gmail.com', pass: 'AdmPr1!', name: 'Administrador Principal (Olmedo)', rol: ROLES.ADMIN }
     ];
@@ -67,13 +65,18 @@ export default function App() {
   const [modalType, setModalType] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
 
+  // Scanner Modal States
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerTarget, setScannerTarget] = useState(null); // 'search', 'movement_product', 'new_product'
+  const videoRef = useRef(null);
+  const scannerStreamRef = useRef(null);
+
   // Form states
   const [formProd, setFormProd] = useState({ sku: '', barcode: '', name: '', description: '', stock: 0, unit_cost: 0 });
   const [formMov, setFormMov] = useState({ type: 'ENTRADA', productId: '', qty: 1 });
   const [formUser, setFormUser] = useState({ email: '', pass: '', name: '', rol: ROLES.OPERATOR });
   const [formOrder, setFormOrder] = useState({ order_number: '', client: '', items: '' });
 
-  // Guardar en localStorage ante cambios
   useEffect(() => {
     localStorage.setItem('stockar_users', JSON.stringify(usersList));
     localStorage.setItem('stockar_products', JSON.stringify(products));
@@ -84,11 +87,76 @@ export default function App() {
     else localStorage.removeItem('stockar_session');
   }, [usersList, products, costs, movements, orders, user]);
 
+  // Lógica de la Cámara / Escáner de Códigos de Barras
+  const startScanner = async (target) => {
+    setScannerTarget(target);
+    setScannerOpen(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      scannerStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+        scanFrame();
+      }
+    } catch (err) {
+      alert('No se pudo acceder a la cámara. Asegúrate de dar permisos en el navegador.');
+      setScannerOpen(false);
+    }
+  };
+
+  const stopScanner = () => {
+    if (scannerStreamRef.current) {
+      scannerStreamRef.current.getTracks().forEach(track => track.stop());
+      scannerStreamRef.current = null;
+    }
+    setScannerOpen(false);
+  };
+
+  const scanFrame = async () => {
+    if (!videoRef.current || videoRef.current.readyState !== videoRef.current.HAVE_ENOUGH_DATA) {
+      if (scannerOpen) requestAnimationFrame(scanFrame);
+      return;
+    }
+
+    if ('BarcodeDetector' in window) {
+      try {
+        const barcodeDetector = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'code_128', 'upc_a', 'qr_code'] });
+        const barcodes = await barcodeDetector.detect(videoRef.current);
+        if (barcodes.length > 0) {
+          const code = barcodes[0].rawValue;
+          handleScannedCode(code);
+          stopScanner();
+          return;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    if (scannerOpen) {
+      requestAnimationFrame(scanFrame);
+    }
+  };
+
+  const handleScannedCode = (code) => {
+    if (scannerTarget === 'search') {
+      setSearchTerm(code);
+    } else if (scannerTarget === 'new_product') {
+      setFormProd(prev => ({ ...prev, barcode: code }));
+    } else if (scannerTarget === 'movement_product') {
+      const found = products.find(p => p.barcode === code || p.sku.toLowerCase() === code.toLowerCase());
+      if (found) {
+        setFormMov(prev => ({ ...prev, productId: found.id }));
+      } else {
+        alert(`Código detectado: ${code}, pero no coincide con ningún producto.`);
+      }
+    }
+  };
+
   const handleLogin = (e) => {
     e.preventDefault();
     const email = e.target.email.value.trim().toLowerCase();
     const pass = e.target.pass.value.trim();
-
     const found = usersList.find(u => u.email.toLowerCase() === email && u.pass === pass);
     if (!found) {
       alert('Credenciales incorrectas o usuario no registrado.');
@@ -97,18 +165,15 @@ export default function App() {
     setUser(found);
   };
 
-  const handleLogout = () => {
-    setUser(null);
-  };
+  const handleLogout = () => setUser(null);
 
-  // Acciones de Negocio
   const handleCreateProduct = (e) => {
     e.preventDefault();
     const newId = 'p_' + Date.now();
     const newProd = {
       id: newId,
       sku: formProd.sku,
-      barcode: formProd.barcode,
+      barcode: formProd.barcode || '779' + Math.floor(100000000 + Math.random() * 900000000),
       name: formProd.name,
       description: formProd.description,
       stock: Number(formProd.stock)
@@ -133,7 +198,6 @@ export default function App() {
       return;
     }
 
-    // Actualizar stock del producto
     const updatedProducts = products.map(p => {
       if (p.id === prod.id) {
         return { ...p, stock: formMov.type === 'ENTRADA' ? p.stock + qty : p.stock - qty };
@@ -142,7 +206,6 @@ export default function App() {
     });
     setProducts(updatedProducts);
 
-    // Registrar historial
     const newMov = {
       id: 'm_' + Date.now(),
       date: new Date().toISOString().replace('T', ' ').substring(0, 16),
@@ -162,10 +225,7 @@ export default function App() {
       alert('Ya existe un usuario con este correo electrónico.');
       return;
     }
-    const newUser = {
-      id: 'u_' + Date.now(),
-      ...formUser
-    };
+    const newUser = { id: 'u_' + Date.now(), ...formUser };
     setUsersList([...usersList, newUser]);
     setModalOpen(false);
     setFormUser({ email: '', pass: '', name: '', rol: ROLES.OPERATOR });
@@ -201,7 +261,6 @@ export default function App() {
     setOrders(orders.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
   };
 
-  // PANTALLA DE LOGIN
   if (!user) {
     return (
       <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col justify-center items-center p-4">
@@ -248,7 +307,6 @@ export default function App() {
   }
 
   const isAdmin = user.rol === ROLES.ADMIN;
-  const isArmadorOrAdmin = isAdmin || user.rol === ROLES.ARMADOR || user.rol === ROLES.OPERATOR;
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col">
@@ -358,17 +416,24 @@ export default function App() {
         {/* PRODUCTS / STOCK TAB */}
         {currentTab === 'products' && (
           <div className="space-y-4">
-            <div className="flex justify-between items-center gap-2">
+            <div className="flex gap-2 items-center">
               <div className="relative flex-1">
                 <Search size={16} className="absolute left-3.5 top-3 text-slate-400" />
                 <input 
                   type="text" 
-                  placeholder="Buscar por SKU o nombre..." 
+                  placeholder="Buscar por SKU, nombre o código..." 
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-4 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
                 />
               </div>
+              <button 
+                onClick={() => startScanner('search')}
+                className="bg-slate-700 hover:bg-slate-600 text-blue-400 border border-slate-600 p-2.5 rounded-xl shadow transition flex items-center gap-1.5 text-xs font-bold"
+                title="Escanear código con cámara"
+              >
+                <Camera size={20} />
+              </button>
               {isAdmin && (
                 <button 
                   onClick={() => { setModalType('product'); setModalOpen(true); }}
@@ -381,12 +446,13 @@ export default function App() {
 
             <div className="space-y-3">
               {products
-                .filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()) || p.sku.toLowerCase().includes(searchTerm.toLowerCase()))
+                .filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()) || p.sku.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode.includes(searchTerm))
                 .map(p => (
                   <div key={p.id} className="bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow flex justify-between items-center">
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-xs bg-slate-700 text-blue-300 font-mono px-2 py-0.5 rounded">{p.sku}</span>
+                        <span className="text-[11px] text-slate-400 font-mono">Barcode: {p.barcode}</span>
                         <span className="text-xs font-bold text-emerald-400">Stock: {p.stock} un.</span>
                       </div>
                       <h3 className="font-bold text-sm text-white mt-1">{p.name}</h3>
@@ -404,7 +470,7 @@ export default function App() {
           </div>
         )}
 
-        {/* ORDERS / ARMADO Y DESPACHO TAB */}
+        {/* ORDERS TAB */}
         {currentTab === 'orders' && (
           <div className="space-y-4">
             <div className="flex justify-between items-center">
@@ -435,7 +501,6 @@ export default function App() {
                   </div>
                   <p className="text-xs text-slate-300 bg-slate-900 p-2.5 rounded-xl border border-slate-700/50"><strong>Ítems:</strong> {o.items}</p>
                   
-                  {/* Botones de gestión de estado para armadores / admins */}
                   <div className="flex gap-2 pt-2 border-t border-slate-700/50">
                     <button 
                       onClick={() => handleUpdateOrderStatus(o.id, 'PENDIENTE')}
@@ -497,7 +562,7 @@ export default function App() {
           </div>
         )}
 
-        {/* USERS MANAGEMENT TAB (EXCLUSIVO ADMIN) */}
+        {/* USERS TAB */}
         {currentTab === 'users' && isAdmin && (
           <div className="space-y-4">
             <div className="flex justify-between items-center">
@@ -535,6 +600,35 @@ export default function App() {
         )}
       </main>
 
+      {/* MODAL CÁMARA ESCÁNER */}
+      {scannerOpen && (
+        <div className="fixed inset-0 bg-black/90 z-50 flex flex-col items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow-2xl relative">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-bold text-sm text-white flex items-center gap-2">
+                <Camera size={18} className="text-blue-400" /> Escanear Código de Barras
+              </h3>
+              <button onClick={stopScanner} className="text-slate-400 hover:text-white">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="relative aspect-video bg-black rounded-xl overflow-hidden border border-slate-700">
+              <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
+              <div className="absolute inset-0 border-2 border-blue-500/50 m-8 rounded-lg pointer-events-none flex items-center justify-center">
+                <div className="w-full h-0.5 bg-rose-500/80 animate-pulse"></div>
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-400 text-center mt-3">Enfoca el código de barras dentro del recuadro con la cámara de tu celular.</p>
+            <button 
+              onClick={stopScanner}
+              className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-2.5 rounded-xl mt-3 text-xs transition"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* MODAL GLOBAL */}
       {modalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -559,8 +653,17 @@ export default function App() {
                   <input type="text" required value={formProd.sku} onChange={e => setFormProd({...formProd, sku: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Código de Barras</label>
-                  <input type="text" required value={formProd.barcode} onChange={e => setFormProd({...formProd, barcode: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-xs font-semibold text-slate-400">Código de Barras</label>
+                    <button 
+                      type="button" 
+                      onClick={() => startScanner('new_product')}
+                      className="text-[11px] text-blue-400 hover:underline flex items-center gap-1 font-bold"
+                    >
+                      <Camera size={14} /> Escanear
+                    </button>
+                  </div>
+                  <input type="text" required value={formProd.barcode} onChange={e => setFormProd({...formProd, barcode: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 font-mono" />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1">Nombre</label>
@@ -595,10 +698,19 @@ export default function App() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Producto</label>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-xs font-semibold text-slate-400">Producto</label>
+                    <button 
+                      type="button" 
+                      onClick={() => startScanner('movement_product')}
+                      className="text-[11px] text-blue-400 hover:underline flex items-center gap-1 font-bold"
+                    >
+                      <Camera size={14} /> Escanear Código
+                    </button>
+                  </div>
                   <select required value={formMov.productId} onChange={e => setFormMov({...formMov, productId: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500">
                     <option value="">Seleccione un producto...</option>
-                    {products.map(p => <option key={p.id} value={p.id}>{p.name} (Stock actual: {p.stock})</option>)}
+                    {products.map(p => <option key={p.id} value={p.id}>{p.name} (Stock: {p.stock})</option>)}
                   </select>
                 </div>
                 <div>
