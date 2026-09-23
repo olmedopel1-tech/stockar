@@ -15,20 +15,21 @@ const ROLES = {
   CONSULTA: 'CONSULTA'
 };
 
+// Lista maestra fija de usuarios accesible desde cualquier dispositivo
+const MASTER_USERS = [
+  { id: 'u-master', email: 'olmedopel1@gmail.com', pass: 'AdmPr1!', name: 'Pablo (Administrador)', rol: ROLES.ADMIN },
+  { id: 'u-horacio', email: 'horacio@gmail.com', pass: '12345', name: 'Horacio (Operador)', rol: ROLES.OPERATOR },
+  { id: 'u-miguel', email: 'miguel@stockar.local', pass: 'miguel123', name: 'Miguel (Armador)', rol: ROLES.ARMADOR },
+  { id: 'u-ana', email: 'ana@stockar.local', pass: 'ana123', name: 'Ana (Consulta)', rol: ROLES.CONSULTA }
+];
+
 export default function App() {
   const [user, setUser] = useState(() => {
     const saved = localStorage.getItem('stockar_session');
     return saved ? JSON.parse(saved) : null;
   });
 
-  // Base de datos de usuarios sincronizada globalmente
-  const [usersList, setUsersList] = useState(() => {
-    const saved = localStorage.getItem('stockar_users');
-    if (saved) return JSON.parse(saved);
-    return [
-      { id: 'u-master', email: 'olmedopel1@gmail.com', pass: 'AdmPr1!', name: 'Administrador Principal (Olmedo)', rol: ROLES.ADMIN }
-    ];
-  });
+  const [usersList, setUsersList] = useState(MASTER_USERS);
 
   const [products, setProducts] = useState(() => {
     const saved = localStorage.getItem('stockar_products');
@@ -77,16 +78,14 @@ export default function App() {
   const [formUser, setFormUser] = useState({ email: '', pass: '', name: '', rol: ROLES.OPERATOR });
   const [formOrder, setFormOrder] = useState({ order_number: '', client: '', items: '' });
 
-  // Persistencia robusta compartida en localStorage y nube simulada
   useEffect(() => {
-    localStorage.setItem('stockar_users', JSON.stringify(usersList));
     localStorage.setItem('stockar_products', JSON.stringify(products));
     localStorage.setItem('stockar_costs', JSON.stringify(costs));
     localStorage.setItem('stockar_movements', JSON.stringify(movements));
     localStorage.setItem('stockar_orders', JSON.stringify(orders));
     if (user) localStorage.setItem('stockar_session', JSON.stringify(user));
     else localStorage.removeItem('stockar_session');
-  }, [usersList, products, costs, movements, orders, user]);
+  }, [products, costs, movements, orders, user]);
 
   // Manejo de la cámara con html5-qrcode
   useEffect(() => {
@@ -150,32 +149,14 @@ export default function App() {
     }
   };
 
-  // AUTENTICACIÓN SUPABASE / LOCAL UNIFICADA
-  const handleLogin = async (e) => {
+  const handleLogin = (e) => {
     e.preventDefault();
     const email = e.target.email.value.trim().toLowerCase();
     const pass = e.target.pass.value.trim();
 
-    // Verificamos conexión con Supabase si está disponible en window
-    if (window.supabase && typeof __supabase_url !== 'undefined') {
-      try {
-        const client = window.supabase.createClient(__supabase_url, __supabase_key);
-        const { data, error } = await client.auth.signInWithPassword({ email, password: pass });
-        if (!error && data.user) {
-          const foundLocal = usersList.find(u => u.email.toLowerCase() === email);
-          setUser(foundLocal || { id: data.user.id, email, name: email.split('@')[0], rol: ROLES.OPERATOR });
-          return;
-        }
-      } catch (err) {
-        console.warn("Supabase fallback to local auth");
-      }
-    }
-
-    // Autenticación local robusta compartida
-    const currentUsers = JSON.parse(localStorage.getItem('stockar_users')) || usersList;
-    const found = currentUsers.find(u => u.email.toLowerCase() === email && u.pass === pass);
+    const found = MASTER_USERS.find(u => u.email.toLowerCase() === email && u.pass === pass);
     if (!found) {
-      alert('Credenciales incorrectas o usuario no encontrado.');
+      alert('Credenciales incorrectas.');
       return;
     }
     setUser(found);
@@ -256,57 +237,6 @@ export default function App() {
     setFormMov({ type: 'ENTRADA', productId: '', qty: 1 });
   };
 
-  const handleCreateUser = async (e) => {
-    e.preventDefault();
-    if (user.rol !== ROLES.ADMIN) return;
-    const cleanEmail = formUser.email.trim().toLowerCase();
-    const cleanPass = formUser.pass.trim();
-
-    if (usersList.some(u => u.email.toLowerCase() === cleanEmail)) {
-      alert('El correo ya está registrado.');
-      return;
-    }
-
-    const newUser = { 
-      id: 'u_' + Date.now(), 
-      name: formUser.name.trim(), 
-      email: cleanEmail, 
-      pass: cleanPass, 
-      rol: formUser.rol 
-    };
-
-    const updated = [...usersList, newUser];
-    setUsersList(updated);
-    localStorage.setItem('stockar_users', JSON.stringify(updated));
-
-    // Si Supabase está disponible, registramos también en Auth
-    if (window.supabase && typeof __supabase_url !== 'undefined') {
-      try {
-        const client = window.supabase.createClient(__supabase_url, __supabase_key);
-        await client.auth.signUp({ email: cleanEmail, password: cleanPass });
-      } catch (err) {
-        console.warn("Supabase signup skipped");
-      }
-    }
-
-    setModalOpen(false);
-    setFormUser({ email: '', pass: '', name: '', rol: ROLES.OPERATOR });
-    alert(`¡Usuario creado con éxito!\nCorreo: ${cleanEmail}\nClave: ${cleanPass}\nYa puede iniciar sesión desde cualquier dispositivo.`);
-  };
-
-  const handleDeleteUser = (id) => {
-    if (user.rol !== ROLES.ADMIN) return;
-    if (usersList.length <= 1) {
-      alert('No puedes eliminar al único administrador.');
-      return;
-    }
-    if (confirm('¿Eliminar usuario?')) {
-      const updated = usersList.filter(u => u.id !== id);
-      setUsersList(updated);
-      localStorage.setItem('stockar_users', JSON.stringify(updated));
-    }
-  };
-
   const handleCreateOrder = (e) => {
     e.preventDefault();
     const newOrder = {
@@ -341,16 +271,22 @@ export default function App() {
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Correo Electrónico</label>
-              <input name="email" type="email" defaultValue="olmedopel1@gmail.com" required className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-blue-500" />
+              <input name="email" type="email" defaultValue="horacio@gmail.com" required className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-blue-500" />
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Contraseña</label>
-              <input name="pass" type="password" defaultValue="AdmPr1!" required className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-blue-500" />
+              <input name="pass" type="password" defaultValue="12345" required className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-blue-500" />
             </div>
             <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 font-semibold py-3 rounded-xl shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2 text-sm">
-              <KeyRound size={18} /> Iniciar Sesión Supabase Auth
+              <KeyRound size={18} /> Iniciar Sesión
             </button>
           </form>
+
+          <div className="mt-6 border-t border-slate-700 pt-4 text-xs text-slate-400">
+            <p className="font-bold mb-1">Perfiles disponibles:</p>
+            <p>• Pablo (Admin): olmedopel1@gmail.com / AdmPr1!</p>
+            <p>• Horacio (Operador): horacio@gmail.com / 12345</p>
+          </div>
         </div>
       </div>
     );
@@ -567,15 +503,9 @@ export default function App() {
         {/* USERS TAB */}
         {currentTab === 'users' && isAdmin && (
           <div className="space-y-4">
-            <div className="flex justify-between items-center">
-              <h2 className="font-bold text-sm text-slate-300 uppercase tracking-wider">Gestión de Usuarios</h2>
-              <button onClick={() => { setModalType('user'); setModalOpen(true); }} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded-xl text-xs font-bold shadow flex items-center gap-1.5 transition">
-                <UserPlus size={16} /> Crear Usuario
-              </button>
-            </div>
-
+            <h2 className="font-bold text-sm text-slate-300 uppercase tracking-wider">Usuarios del Sistema</h2>
             <div className="space-y-3">
-              {usersList.map(u => (
+              {MASTER_USERS.map(u => (
                 <div key={u.id} className="bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow flex justify-between items-center">
                   <div>
                     <div className="flex items-center gap-2">
@@ -584,11 +514,6 @@ export default function App() {
                     </div>
                     <h3 className="font-bold text-sm text-white mt-1">{u.name}</h3>
                   </div>
-                  {u.email !== 'olmedopel1@gmail.com' && (
-                    <button onClick={() => handleDeleteUser(u.id)} className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 border border-rose-500/30 p-2 rounded-xl text-xs transition">
-                      Eliminar
-                    </button>
-                  )}
                 </div>
               ))}
             </div>
@@ -626,7 +551,6 @@ export default function App() {
                 {modalType === 'product' && 'Nuevo Producto'}
                 {modalType === 'edit_product' && 'Editar Producto'}
                 {modalType === 'movement' && 'Ingreso de Stock'}
-                {modalType === 'user' && 'Crear Nuevo Usuario'}
                 {modalType === 'order' && 'Nuevo Pedido / Despacho'}
               </h3>
               <button onClick={() => setModalOpen(false)} className="text-slate-400 hover:text-white"><X size={20} /></button>
@@ -694,34 +618,6 @@ export default function App() {
                   <input type="number" min="1" required value={formMov.qty} onChange={e => setFormMov({...formMov, qty: Number(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
                 </div>
                 <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl mt-4 shadow transition text-sm">Registrar Ingreso</button>
-              </form>
-            )}
-
-            {/* FORMULARIO USUARIO */}
-            {modalType === 'user' && (
-              <form onSubmit={handleCreateUser} className="space-y-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Nombre</label>
-                  <input type="text" required value={formUser.name} onChange={e => setFormUser({...formUser, name: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Correo Electrónico</label>
-                  <input type="email" required value={formUser.email} onChange={e => setFormUser({...formUser, email: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Contraseña</label>
-                  <input type="text" required value={formUser.pass} onChange={e => setFormUser({...formUser, pass: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Rol</label>
-                  <select value={formUser.rol} onChange={e => setFormUser({...formUser, rol: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500">
-                    <option value={ROLES.ADMIN}>Administrador</option>
-                    <option value={ROLES.OPERATOR}>Operador</option>
-                    <option value={ROLES.ARMADOR}>Armador</option>
-                    <option value={ROLES.CONSULTA}>Consulta</option>
-                  </select>
-                </div>
-                <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl mt-4 shadow transition text-sm">Crear Usuario</button>
               </form>
             )}
 
