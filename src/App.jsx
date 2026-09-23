@@ -5,7 +5,7 @@ import {
   AlertCircle, Search, Plus, Filter, FileText, ScanLine, 
   History, Save, Camera, XCircle, Wifi, WifiOff, RefreshCw,
   AlertTriangle, Check, CloudOff, Cloud, UserCheck, Download,
-  Lock, Mail, UserPlus, KeyRound, CheckSquare, ShieldCheck, Users, Truck
+  Lock, Mail, UserPlus, KeyRound, CheckSquare, ShieldCheck, Users, Truck, Edit3
 } from 'lucide-react';
 
 const ROLES = {
@@ -62,17 +62,17 @@ export default function App() {
   const [currentTab, setCurrentTab] = useState('dashboard');
   const [isOnline, setIsOnline] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
-  const [modalType, setModalType] = useState('');
+  const [modalType, setModalType] = useState(''); // 'product', 'movement', 'user', 'order', 'edit_product'
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Scanner Modal States
+  // Scanner states
   const [scannerOpen, setScannerOpen] = useState(false);
-  const [scannerTarget, setScannerTarget] = useState(null); // 'search', 'movement_product', 'new_product'
+  const [scannerTarget, setScannerTarget] = useState(null); 
   const videoRef = useRef(null);
   const scannerStreamRef = useRef(null);
 
   // Form states
-  const [formProd, setFormProd] = useState({ sku: '', barcode: '', name: '', description: '', stock: 0, unit_cost: 0 });
+  const [formProd, setFormProd] = useState({ id: '', sku: '', barcode: '', name: '', description: '', stock: 0, unit_cost: 0 });
   const [formMov, setFormMov] = useState({ type: 'ENTRADA', productId: '', qty: 1 });
   const [formUser, setFormUser] = useState({ email: '', pass: '', name: '', rol: ROLES.OPERATOR });
   const [formOrder, setFormOrder] = useState({ order_number: '', client: '', items: '' });
@@ -87,7 +87,7 @@ export default function App() {
     else localStorage.removeItem('stockar_session');
   }, [usersList, products, costs, movements, orders, user]);
 
-  // Lógica de la Cámara / Escáner de Códigos de Barras
+  // Cámara / Escáner
   const startScanner = async (target) => {
     setScannerTarget(target);
     setScannerOpen(true);
@@ -100,7 +100,7 @@ export default function App() {
         scanFrame();
       }
     } catch (err) {
-      alert('No se pudo acceder a la cámara. Asegúrate de dar permisos en el navegador.');
+      alert('No se pudo acceder a la cámara. Verifica los permisos.');
       setScannerOpen(false);
     }
   };
@@ -124,8 +124,7 @@ export default function App() {
         const barcodeDetector = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'code_128', 'upc_a', 'qr_code'] });
         const barcodes = await barcodeDetector.detect(videoRef.current);
         if (barcodes.length > 0) {
-          const code = barcodes[0].rawValue;
-          handleScannedCode(code);
+          handleScannedCode(barcodes[0].rawValue);
           stopScanner();
           return;
         }
@@ -133,23 +132,25 @@ export default function App() {
         console.error(e);
       }
     }
-    if (scannerOpen) {
-      requestAnimationFrame(scanFrame);
-    }
+    if (scannerOpen) requestAnimationFrame(scanFrame);
   };
 
   const handleScannedCode = (code) => {
     if (scannerTarget === 'search') {
       setSearchTerm(code);
-    } else if (scannerTarget === 'new_product') {
+    } else if (scannerTarget === 'new_product' || scannerTarget === 'edit_product') {
       setFormProd(prev => ({ ...prev, barcode: code }));
     } else if (scannerTarget === 'movement_product') {
       const found = products.find(p => p.barcode === code || p.sku.toLowerCase() === code.toLowerCase());
       if (found) {
         setFormMov(prev => ({ ...prev, productId: found.id }));
       } else {
-        alert(`Código detectado: ${code}, pero no coincide con ningún producto.`);
+        alert(`Código detectado: ${code}, no registrado en stock.`);
       }
+    } else if (scannerTarget === 'order_items') {
+      const found = products.find(p => p.barcode === code || p.sku.toLowerCase() === code.toLowerCase());
+      const itemName = found ? found.name : code;
+      setFormOrder(prev => ({ ...prev, items: prev.items ? `${prev.items}, 1x ${itemName}` : `1x ${itemName}` }));
     }
   };
 
@@ -159,7 +160,7 @@ export default function App() {
     const pass = e.target.pass.value.trim();
     const found = usersList.find(u => u.email.toLowerCase() === email && u.pass === pass);
     if (!found) {
-      alert('Credenciales incorrectas o usuario no registrado.');
+      alert('Credenciales incorrectas.');
       return;
     }
     setUser(found);
@@ -167,26 +168,53 @@ export default function App() {
 
   const handleLogout = () => setUser(null);
 
-  const handleCreateProduct = (e) => {
+  // Guardar / Editar Producto (Solo Admin)
+  const handleSaveProduct = (e) => {
     e.preventDefault();
-    const newId = 'p_' + Date.now();
-    const newProd = {
-      id: newId,
-      sku: formProd.sku,
-      barcode: formProd.barcode || '779' + Math.floor(100000000 + Math.random() * 900000000),
-      name: formProd.name,
-      description: formProd.description,
-      stock: Number(formProd.stock)
-    };
+    if (user.rol !== ROLES.ADMIN) return;
 
-    setProducts([newProd, ...products]);
-    if (user.rol === ROLES.ADMIN && formProd.unit_cost > 0) {
-      setCosts({ ...costs, [newId]: { unit_cost: Number(formProd.unit_cost), currency: 'ARS' } });
+    if (formProd.id) {
+      // Edición
+      setProducts(products.map(p => p.id === formProd.id ? { ...p, sku: formProd.sku, barcode: formProd.barcode, name: formProd.name, description: formProd.description, stock: Number(formProd.stock) } : p));
+      if (formProd.unit_cost > 0) {
+        setCosts({ ...costs, [formProd.id]: { unit_cost: Number(formProd.unit_cost), currency: 'ARS' } });
+      }
+    } else {
+      // Creación
+      const newId = 'p_' + Date.now();
+      const newProd = {
+        id: newId,
+        sku: formProd.sku,
+        barcode: formProd.barcode || '779' + Math.floor(100000000 + Math.random() * 900000000),
+        name: formProd.name,
+        description: formProd.description,
+        stock: Number(formProd.stock)
+      };
+      setProducts([newProd, ...products]);
+      if (formProd.unit_cost > 0) {
+        setCosts({ ...costs, [newId]: { unit_cost: Number(formProd.unit_cost), currency: 'ARS' } });
+      }
     }
     setModalOpen(false);
-    setFormProd({ sku: '', barcode: '', name: '', description: '', stock: 0, unit_cost: 0 });
+    setFormProd({ id: '', sku: '', barcode: '', name: '', description: '', stock: 0, unit_cost: 0 });
   };
 
+  const openEditProduct = (p) => {
+    if (user.rol !== ROLES.ADMIN) return;
+    setFormProd({
+      id: p.id,
+      sku: p.sku,
+      barcode: p.barcode,
+      name: p.name,
+      description: p.description,
+      stock: p.stock,
+      unit_cost: costs[p.id]?.unit_cost || 0
+    });
+    setModalType('edit_product');
+    setModalOpen(true);
+  };
+
+  // Movimientos Stock (Solo Admin ingresos, salidas generales operativas)
   const handleCreateMovement = (e) => {
     e.preventDefault();
     const prod = products.find(p => p.id === formMov.productId);
@@ -194,18 +222,16 @@ export default function App() {
 
     const qty = Number(formMov.qty);
     if (formMov.type === 'SALIDA' && prod.stock < qty) {
-      alert('Stock insuficiente para realizar esta salida.');
+      alert('Stock insuficiente.');
+      return;
+    }
+    if (formMov.type === 'ENTRADA' && user.rol !== ROLES.ADMIN) {
+      alert('Solo el Administrador puede registrar ingresos de stock.');
       return;
     }
 
-    const updatedProducts = products.map(p => {
-      if (p.id === prod.id) {
-        return { ...p, stock: formMov.type === 'ENTRADA' ? p.stock + qty : p.stock - qty };
-      }
-      return p;
-    });
-    setProducts(updatedProducts);
-
+    setProducts(products.map(p => p.id === prod.id ? { ...p, stock: formMov.type === 'ENTRADA' ? p.stock + qty : p.stock - qty } : p));
+    
     const newMov = {
       id: 'm_' + Date.now(),
       date: new Date().toISOString().replace('T', ' ').substring(0, 16),
@@ -219,29 +245,32 @@ export default function App() {
     setFormMov({ type: 'ENTRADA', productId: '', qty: 1 });
   };
 
+  // Gestión de Usuarios (Solo Admin)
   const handleCreateUser = (e) => {
     e.preventDefault();
+    if (user.rol !== ROLES.ADMIN) return;
     if (usersList.some(u => u.email.toLowerCase() === formUser.email.toLowerCase())) {
-      alert('Ya existe un usuario con este correo electrónico.');
+      alert('El correo ya está registrado.');
       return;
     }
-    const newUser = { id: 'u_' + Date.now(), ...formUser };
-    setUsersList([...usersList, newUser]);
+    setUsersList([...usersList, { id: 'u_' + Date.now(), ...formUser }]);
     setModalOpen(false);
     setFormUser({ email: '', pass: '', name: '', rol: ROLES.OPERATOR });
-    alert('Usuario creado correctamente.');
+    alert('Usuario creado con éxito.');
   };
 
   const handleDeleteUser = (id) => {
+    if (user.rol !== ROLES.ADMIN) return;
     if (usersList.length <= 1) {
-      alert('No puedes eliminar al único usuario del sistema.');
+      alert('No puedes eliminar al único administrador.');
       return;
     }
-    if (confirm('¿Estás seguro de eliminar este usuario?')) {
+    if (confirm('¿Eliminar usuario?')) {
       setUsersList(usersList.filter(u => u.id !== id));
     }
   };
 
+  // Pedidos (Admin, Operador, Armador)
   const handleCreateOrder = (e) => {
     e.preventDefault();
     const newOrder = {
@@ -276,28 +305,13 @@ export default function App() {
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Correo Electrónico</label>
-              <input 
-                name="email" 
-                type="email" 
-                defaultValue="olmedopel1@gmail.com" 
-                required 
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 text-sm" 
-              />
+              <input name="email" type="email" defaultValue="olmedopel1@gmail.com" required className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-blue-500" />
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Contraseña</label>
-              <input 
-                name="pass" 
-                type="password" 
-                defaultValue="AdmPr1!" 
-                required 
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 text-sm" 
-              />
+              <input name="pass" type="password" defaultValue="AdmPr1!" required className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-blue-500" />
             </div>
-            <button 
-              type="submit" 
-              className="w-full bg-blue-600 hover:bg-blue-500 font-semibold py-3 rounded-xl transition duration-200 shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2 text-sm"
-            >
+            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 font-semibold py-3 rounded-xl shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2 text-sm">
               <KeyRound size={18} /> Iniciar Sesión
             </button>
           </form>
@@ -323,53 +337,32 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-2">
-          <button 
-            onClick={() => setIsOnline(!isOnline)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition ${isOnline ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'}`}
-          >
-            {isOnline ? <Wifi size={14} /> : <WifiOff size={14} />}
-            {isOnline ? 'Online' : 'Offline'}
+          <button onClick={() => setIsOnline(!isOnline)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition ${isOnline ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'}`}>
+            {isOnline ? <Wifi size={14} /> : <WifiOff size={14} />} {isOnline ? 'Online' : 'Offline'}
           </button>
-
           <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-rose-400 transition" title="Cerrar Sesión">
             <LogOut size={20} />
           </button>
         </div>
       </header>
 
-      {/* Main Content Area */}
+      {/* Main Content */}
       <main className="flex-1 p-4 max-w-5xl mx-auto w-full pb-20">
-        {/* Navigation Tabs */}
         <div className="flex bg-slate-800/80 p-1.5 rounded-2xl mb-6 border border-slate-700 shadow-inner overflow-x-auto gap-1">
-          <button 
-            onClick={() => setCurrentTab('dashboard')}
-            className={`flex-1 min-w-[90px] py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition ${currentTab === 'dashboard' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
-          >
+          <button onClick={() => setCurrentTab('dashboard')} className={`flex-1 min-w-[90px] py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition ${currentTab === 'dashboard' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
             <LayoutDashboard size={16} /> Resumen
           </button>
-          <button 
-            onClick={() => setCurrentTab('products')}
-            className={`flex-1 min-w-[90px] py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition ${currentTab === 'products' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
-          >
+          <button onClick={() => setCurrentTab('products')} className={`flex-1 min-w-[90px] py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition ${currentTab === 'products' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
             <Package size={16} /> Stock
           </button>
-          <button 
-            onClick={() => setCurrentTab('orders')}
-            className={`flex-1 min-w-[90px] py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition ${currentTab === 'orders' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
-          >
+          <button onClick={() => setCurrentTab('orders')} className={`flex-1 min-w-[90px] py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition ${currentTab === 'orders' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
             <Truck size={16} /> Pedidos
           </button>
-          <button 
-            onClick={() => setCurrentTab('movements')}
-            className={`flex-1 min-w-[90px] py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition ${currentTab === 'movements' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
-          >
+          <button onClick={() => setCurrentTab('movements')} className={`flex-1 min-w-[90px] py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition ${currentTab === 'movements' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
             <ArrowRightLeft size={16} /> Movimientos
           </button>
           {isAdmin && (
-            <button 
-              onClick={() => setCurrentTab('users')}
-              className={`flex-1 min-w-[90px] py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition ${currentTab === 'users' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
-            >
+            <button onClick={() => setCurrentTab('users')} className={`flex-1 min-w-[90px] py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition ${currentTab === 'users' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
               <Users size={16} /> Usuarios
             </button>
           )}
@@ -395,17 +388,11 @@ export default function App() {
               </h2>
               <div className="grid grid-cols-2 gap-3">
                 {isAdmin && (
-                  <button 
-                    onClick={() => { setModalType('product'); setModalOpen(true); }}
-                    className="bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 p-3 rounded-xl text-left transition flex items-center gap-3 text-blue-300 font-semibold text-xs"
-                  >
+                  <button onClick={() => { setFormProd({ id: '', sku: '', barcode: '', name: '', description: '', stock: 0, unit_cost: 0 }); setModalType('product'); setModalOpen(true); }} className="bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 p-3 rounded-xl text-left transition flex items-center gap-3 text-blue-300 font-semibold text-xs">
                     <Plus size={20} /> Nuevo Producto
                   </button>
                 )}
-                <button 
-                  onClick={() => { setModalType('order'); setModalOpen(true); }}
-                  className="bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/30 p-3 rounded-xl text-left transition flex items-center gap-3 text-amber-300 font-semibold text-xs"
-                >
+                <button onClick={() => { setModalType('order'); setModalOpen(true); }} className="bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/30 p-3 rounded-xl text-left transition flex items-center gap-3 text-amber-300 font-semibold text-xs">
                   <Truck size={20} /> Nuevo Pedido
                 </button>
               </div>
@@ -413,72 +400,61 @@ export default function App() {
           </div>
         )}
 
-        {/* PRODUCTS / STOCK TAB */}
+        {/* PRODUCTS TAB */}
         {currentTab === 'products' && (
           <div className="space-y-4">
             <div className="flex gap-2 items-center">
               <div className="relative flex-1">
                 <Search size={16} className="absolute left-3.5 top-3 text-slate-400" />
-                <input 
-                  type="text" 
-                  placeholder="Buscar por SKU, nombre o código..." 
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-4 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
-                />
+                <input type="text" placeholder="Buscar por SKU, nombre o código..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-4 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
               </div>
-              <button 
-                onClick={() => startScanner('search')}
-                className="bg-slate-700 hover:bg-slate-600 text-blue-400 border border-slate-600 p-2.5 rounded-xl shadow transition flex items-center gap-1.5 text-xs font-bold"
-                title="Escanear código con cámara"
-              >
+              <button onClick={() => startScanner('search')} className="bg-slate-700 hover:bg-slate-600 text-blue-400 border border-slate-600 p-2.5 rounded-xl shadow transition" title="Escanear con cámara">
                 <Camera size={20} />
               </button>
               {isAdmin && (
-                <button 
-                  onClick={() => { setModalType('product'); setModalOpen(true); }}
-                  className="bg-blue-600 hover:bg-blue-500 text-white p-2.5 rounded-xl shadow transition"
-                >
+                <button onClick={() => { setFormProd({ id: '', sku: '', barcode: '', name: '', description: '', stock: 0, unit_cost: 0 }); setModalType('product'); setModalOpen(true); }} className="bg-blue-600 hover:bg-blue-500 text-white p-2.5 rounded-xl shadow transition">
                   <Plus size={20} />
                 </button>
               )}
             </div>
 
             <div className="space-y-3">
-              {products
-                .filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()) || p.sku.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode.includes(searchTerm))
-                .map(p => (
-                  <div key={p.id} className="bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow flex justify-between items-center">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs bg-slate-700 text-blue-300 font-mono px-2 py-0.5 rounded">{p.sku}</span>
-                        <span className="text-[11px] text-slate-400 font-mono">Barcode: {p.barcode}</span>
-                        <span className="text-xs font-bold text-emerald-400">Stock: {p.stock} un.</span>
-                      </div>
-                      <h3 className="font-bold text-sm text-white mt-1">{p.name}</h3>
-                      <p className="text-xs text-slate-400 mt-0.5">{p.description}</p>
+              {products.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()) || p.sku.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode.includes(searchTerm)).map(p => (
+                <div key={p.id} className="bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow flex justify-between items-center">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs bg-slate-700 text-blue-300 font-mono px-2 py-0.5 rounded">{p.sku}</span>
+                      <span className="text-[11px] text-slate-400 font-mono">Barcode: {p.barcode}</span>
+                      <span className="text-xs font-bold text-emerald-400">Stock: {p.stock} un.</span>
                     </div>
+                    <h3 className="font-bold text-sm text-white mt-1">{p.name}</h3>
+                    <p className="text-xs text-slate-400 mt-0.5">{p.description}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
                     {isAdmin && costs[p.id] && (
                       <div className="text-right">
                         <span className="text-xs text-slate-400 block">Costo unitario</span>
                         <span className="text-sm font-extrabold text-emerald-400">${costs[p.id].unit_cost.toLocaleString()}</span>
                       </div>
                     )}
+                    {isAdmin && (
+                      <button onClick={() => openEditProduct(p)} className="bg-slate-700 hover:bg-slate-600 text-blue-400 p-2 rounded-xl transition">
+                        <Edit3 size={16} />
+                      </button>
+                    )}
                   </div>
-                ))}
+                </div>
+              ))}
             </div>
           </div>
         )}
 
-        {/* ORDERS TAB */}
+        {/* ORDERS TAB (Cualquier rol autorizado puede agregar ítems escaneando con la cámara) */}
         {currentTab === 'orders' && (
           <div className="space-y-4">
             <div className="flex justify-between items-center">
-              <h2 className="font-bold text-sm text-slate-300 uppercase tracking-wider">Armado y Despacho</h2>
-              <button 
-                onClick={() => { setModalType('order'); setModalOpen(true); }}
-                className="bg-amber-600 hover:bg-amber-500 text-white px-3 py-2 rounded-xl text-xs font-bold shadow flex items-center gap-1.5 transition"
-              >
+              <h2 className="font-bold text-sm text-slate-300 uppercase tracking-wider">Armado y Despacho de Pedidos</h2>
+              <button onClick={() => { setModalType('order'); setModalOpen(true); }} className="bg-amber-600 hover:bg-amber-500 text-white px-3 py-2 rounded-xl text-xs font-bold shadow flex items-center gap-1.5 transition">
                 <Plus size={16} /> Crear Pedido
               </button>
             </div>
@@ -502,22 +478,13 @@ export default function App() {
                   <p className="text-xs text-slate-300 bg-slate-900 p-2.5 rounded-xl border border-slate-700/50"><strong>Ítems:</strong> {o.items}</p>
                   
                   <div className="flex gap-2 pt-2 border-t border-slate-700/50">
-                    <button 
-                      onClick={() => handleUpdateOrderStatus(o.id, 'PENDIENTE')}
-                      className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition ${o.status === 'PENDIENTE' ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-                    >
+                    <button onClick={() => handleUpdateOrderStatus(o.id, 'PENDIENTE')} className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition ${o.status === 'PENDIENTE' ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>
                       Pendiente
                     </button>
-                    <button 
-                      onClick={() => handleUpdateOrderStatus(o.id, 'EN ARMADO')}
-                      className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition ${o.status === 'EN ARMADO' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-                    >
+                    <button onClick={() => handleUpdateOrderStatus(o.id, 'EN ARMADO')} className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition ${o.status === 'EN ARMADO' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>
                       En Armado
                     </button>
-                    <button 
-                      onClick={() => handleUpdateOrderStatus(o.id, 'DESPACHADO')}
-                      className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition ${o.status === 'DESPACHADO' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-                    >
+                    <button onClick={() => handleUpdateOrderStatus(o.id, 'DESPACHADO')} className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition ${o.status === 'DESPACHADO' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>
                       Despachado
                     </button>
                   </div>
@@ -532,12 +499,11 @@ export default function App() {
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <h2 className="font-bold text-sm text-slate-300 uppercase tracking-wider">Historial de Operaciones</h2>
-              <button 
-                onClick={() => { setModalType('movement'); setModalOpen(true); }}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded-xl text-xs font-bold shadow flex items-center gap-1.5 transition"
-              >
-                <Plus size={16} /> Movimiento Stock
-              </button>
+              {isAdmin && (
+                <button onClick={() => { setModalType('movement'); setModalOpen(true); }} className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded-xl text-xs font-bold shadow flex items-center gap-1.5 transition">
+                  <Plus size={16} /> Ingreso Stock
+                </button>
+              )}
             </div>
 
             <div className="space-y-3">
@@ -562,15 +528,12 @@ export default function App() {
           </div>
         )}
 
-        {/* USERS TAB */}
+        {/* USERS TAB (Solo Admin) */}
         {currentTab === 'users' && isAdmin && (
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <h2 className="font-bold text-sm text-slate-300 uppercase tracking-wider">Gestión de Usuarios</h2>
-              <button 
-                onClick={() => { setModalType('user'); setModalOpen(true); }}
-                className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded-xl text-xs font-bold shadow flex items-center gap-1.5 transition"
-              >
+              <button onClick={() => { setModalType('user'); setModalOpen(true); }} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded-xl text-xs font-bold shadow flex items-center gap-1.5 transition">
                 <UserPlus size={16} /> Crear Usuario
               </button>
             </div>
@@ -586,10 +549,7 @@ export default function App() {
                     <h3 className="font-bold text-sm text-white mt-1">{u.name}</h3>
                   </div>
                   {u.email !== 'olmedopel1@gmail.com' && (
-                    <button 
-                      onClick={() => handleDeleteUser(u.id)}
-                      className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 border border-rose-500/30 p-2 rounded-xl text-xs transition"
-                    >
+                    <button onClick={() => handleDeleteUser(u.id)} className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 border border-rose-500/30 p-2 rounded-xl text-xs transition">
                       Eliminar
                     </button>
                   )}
@@ -600,17 +560,15 @@ export default function App() {
         )}
       </main>
 
-      {/* MODAL CÁMARA ESCÁNER */}
+      {/* SCANNER MODAL */}
       {scannerOpen && (
         <div className="fixed inset-0 bg-black/90 z-50 flex flex-col items-center justify-center p-4">
           <div className="w-full max-w-sm bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow-2xl relative">
             <div className="flex justify-between items-center mb-3">
               <h3 className="font-bold text-sm text-white flex items-center gap-2">
-                <Camera size={18} className="text-blue-400" /> Escanear Código de Barras
+                <Camera size={18} className="text-blue-400" /> Escáner de Código
               </h3>
-              <button onClick={stopScanner} className="text-slate-400 hover:text-white">
-                <X size={20} />
-              </button>
+              <button onClick={stopScanner} className="text-slate-400 hover:text-white"><X size={20} /></button>
             </div>
             <div className="relative aspect-video bg-black rounded-xl overflow-hidden border border-slate-700">
               <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
@@ -618,11 +576,8 @@ export default function App() {
                 <div className="w-full h-0.5 bg-rose-500/80 animate-pulse"></div>
               </div>
             </div>
-            <p className="text-[11px] text-slate-400 text-center mt-3">Enfoca el código de barras dentro del recuadro con la cámara de tu celular.</p>
-            <button 
-              onClick={stopScanner}
-              className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-2.5 rounded-xl mt-3 text-xs transition"
-            >
+            <p className="text-[11px] text-slate-400 text-center mt-3">Apunta con la cámara al código de barras.</p>
+            <button onClick={stopScanner} className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-2.5 rounded-xl mt-3 text-xs transition">
               Cancelar
             </button>
           </div>
@@ -636,18 +591,17 @@ export default function App() {
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold text-lg text-white">
                 {modalType === 'product' && 'Nuevo Producto'}
-                {modalType === 'movement' && 'Registrar Movimiento Stock'}
+                {modalType === 'edit_product' && 'Editar Producto'}
+                {modalType === 'movement' && 'Ingreso de Stock'}
                 {modalType === 'user' && 'Crear Nuevo Usuario'}
                 {modalType === 'order' && 'Nuevo Pedido / Despacho'}
               </h3>
-              <button onClick={() => setModalOpen(false)} className="text-slate-400 hover:text-white">
-                <X size={20} />
-              </button>
+              <button onClick={() => setModalOpen(false)} className="text-slate-400 hover:text-white"><X size={20} /></button>
             </div>
 
-            {/* FORMULARIO PRODUCTO */}
-            {modalType === 'product' && (
-              <form onSubmit={handleCreateProduct} className="space-y-3">
+            {/* FORMULARIO PRODUCTO (CREAR / EDITAR - SOLO ADMIN) */}
+            {(modalType === 'product' || modalType === 'edit_product') && (
+              <form onSubmit={handleSaveProduct} className="space-y-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1">SKU</label>
                   <input type="text" required value={formProd.sku} onChange={e => setFormProd({...formProd, sku: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
@@ -655,15 +609,11 @@ export default function App() {
                 <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="text-xs font-semibold text-slate-400">Código de Barras</label>
-                    <button 
-                      type="button" 
-                      onClick={() => startScanner('new_product')}
-                      className="text-[11px] text-blue-400 hover:underline flex items-center gap-1 font-bold"
-                    >
+                    <button type="button" onClick={() => startScanner('new_product')} className="text-[11px] text-blue-400 hover:underline flex items-center gap-1 font-bold">
                       <Camera size={14} /> Escanear
                     </button>
                   </div>
-                  <input type="text" required value={formProd.barcode} onChange={e => setFormProd({...formProd, barcode: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 font-mono" />
+                  <input type="text" required value={formProd.barcode} onChange={e => setFormProd({...formProd, barcode: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1">Nombre</label>
@@ -674,7 +624,7 @@ export default function App() {
                   <input type="text" value={formProd.description} onChange={e => setFormProd({...formProd, description: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Stock Inicial</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Stock Actual</label>
                   <input type="number" min="0" required value={formProd.stock} onChange={e => setFormProd({...formProd, stock: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
                 </div>
                 {isAdmin && (
@@ -687,45 +637,38 @@ export default function App() {
               </form>
             )}
 
-            {/* FORMULARIO MOVIMIENTO */}
+            {/* FORMULARIO INGRESO STOCK (SOLO ADMIN) */}
             {modalType === 'movement' && (
               <form onSubmit={handleCreateMovement} className="space-y-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Tipo de Operación</label>
-                  <select value={formMov.type} onChange={e => setFormMov({...formMov, type: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500">
-                    <option value="ENTRADA">Entrada de Stock</option>
-                    <option value="SALIDA">Salida de Stock</option>
-                  </select>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Tipo</label>
+                  <input type="text" disabled value="ENTRADA DE STOCK" className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-emerald-400 font-bold" />
                 </div>
                 <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="text-xs font-semibold text-slate-400">Producto</label>
-                    <button 
-                      type="button" 
-                      onClick={() => startScanner('movement_product')}
-                      className="text-[11px] text-blue-400 hover:underline flex items-center gap-1 font-bold"
-                    >
-                      <Camera size={14} /> Escanear Código
+                    <button type="button" onClick={() => startScanner('movement_product')} className="text-[11px] text-blue-400 hover:underline flex items-center gap-1 font-bold">
+                      <Camera size={14} /> Escanear
                     </button>
                   </div>
                   <select required value={formMov.productId} onChange={e => setFormMov({...formMov, productId: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500">
-                    <option value="">Seleccione un producto...</option>
+                    <option value="">Seleccione producto...</option>
                     {products.map(p => <option key={p.id} value={p.id}>{p.name} (Stock: {p.stock})</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Cantidad</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Cantidad a Ingresar</label>
                   <input type="number" min="1" required value={formMov.qty} onChange={e => setFormMov({...formMov, qty: Number(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
                 </div>
-                <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl mt-4 shadow transition text-sm">Registrar Movimiento</button>
+                <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl mt-4 shadow transition text-sm">Registrar Ingreso</button>
               </form>
             )}
 
-            {/* FORMULARIO USUARIO */}
+            {/* FORMULARIO USUARIO (SOLO ADMIN) */}
             {modalType === 'user' && (
               <form onSubmit={handleCreateUser} className="space-y-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Nombre y Apellido</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Nombre</label>
                   <input type="text" required value={formUser.name} onChange={e => setFormUser({...formUser, name: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
@@ -737,19 +680,19 @@ export default function App() {
                   <input type="text" required value={formUser.pass} onChange={e => setFormUser({...formUser, pass: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Rol / Permisos</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Rol</label>
                   <select value={formUser.rol} onChange={e => setFormUser({...formUser, rol: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500">
-                    <option value={ROLES.ADMIN}>Administrador (Control total y costos)</option>
-                    <option value={ROLES.OPERATOR}>Operador (Stock y movimientos)</option>
-                    <option value={ROLES.ARMADOR}>Armador (Logística de pedidos)</option>
-                    <option value={ROLES.CONSULTA}>Consulta (Solo lectura)</option>
+                    <option value={ROLES.ADMIN}>Administrador</option>
+                    <option value={ROLES.OPERATOR}>Operador</option>
+                    <option value={ROLES.ARMADOR}>Armador</option>
+                    <option value={ROLES.CONSULTA}>Consulta</option>
                   </select>
                 </div>
                 <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl mt-4 shadow transition text-sm">Crear Usuario</button>
               </form>
             )}
 
-            {/* FORMULARIO PEDIDO */}
+            {/* FORMULARIO PEDIDO (CUALQUIER ROL AUTORIZADO PUEDE ESCANEAR ÍTEMS) */}
             {modalType === 'order' && (
               <form onSubmit={handleCreateOrder} className="space-y-3">
                 <div>
@@ -758,11 +701,16 @@ export default function App() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1">Cliente / Destino</label>
-                  <input type="text" placeholder="Nombre del cliente o sucursal" required value={formOrder.client} onChange={e => setFormOrder({...formOrder, client: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
+                  <input type="text" placeholder="Nombre del cliente" required value={formOrder.client} onChange={e => setFormOrder({...formOrder, client: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Detalle de Ítems</label>
-                  <textarea placeholder="Ej: 2x Router WiFi, 5x Cable UTP" required value={formOrder.items} onChange={e => setFormOrder({...formOrder, items: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 h-20 resize-none" />
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-xs font-semibold text-slate-400">Detalle de Ítems (Escanea con cámara)</label>
+                    <button type="button" onClick={() => startScanner('order_items')} className="text-[11px] text-amber-400 hover:underline flex items-center gap-1 font-bold">
+                      <Camera size={14} /> Esccanear Producto
+                    </button>
+                  </div>
+                  <textarea placeholder="Ítems del pedido..." required value={formOrder.items} onChange={e => setFormOrder({...formOrder, items: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 h-20 resize-none font-mono" />
                 </div>
                 <button type="submit" className="w-full bg-amber-600 hover:bg-amber-500 text-white font-bold py-3 rounded-xl mt-4 shadow transition text-sm">Registrar Pedido</button>
               </form>
